@@ -11,6 +11,16 @@ terraform {
   }
 }
 
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] 
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+}
+
 provider "aws" {
   region = "us-east-1"
 }
@@ -39,7 +49,7 @@ module "eks" {
   version = "19.15.3"
 
   cluster_name    = "multi-cloud-eks"
-  cluster_version = "1.27"
+  cluster_version = "1.30" 
 
   vpc_id                         = module.aws_vpc.vpc_id
   subnet_ids                     = module.aws_vpc.private_subnets
@@ -125,22 +135,28 @@ resource "aws_security_group" "nginx_sg" {
 }
 
 resource "aws_instance" "nginx_gateway" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t2.micro"
-  key_name      = aws_key_pair.deployer.key_name
-  subnet_id     = module.aws_vpc.public_subnets[0]
+  ami                    = data.aws_ami.ubuntu.id 
+  instance_type          = "t2.micro"
+  key_name               = aws_key_pair.deployer.key_name
   vpc_security_group_ids = [aws_security_group.nginx_sg.id]
-  associate_public_ip_address = true
+  subnet_id              = module.aws_vpc.public_subnets[0]
+  associate_public_ip_address = true 
 
-  user_data = <<-EOF
-              #!/bin/bash
-              sudo apt update -y
-              sudo apt install nginx -y
-              sudo systemctl start nginx
-              sudo systemctl enable nginx
-              EOF
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file("../mc-key") 
+    host        = self.public_ip
+  }
 
-  tags = { Name = "Multi-Cloud-Gateway" }
+  provisioner "remote-exec" {
+    inline = [
+      "sudo apt update -y",
+      "sudo apt install nginx -y",
+      "sudo systemctl start nginx",
+      "sudo bash -c 'echo \"Waiting for K8s endpoints...\" > /var/www/html/index.html'"
+    ]
+  }
 }
 
 output "nginx_public_ip" {
